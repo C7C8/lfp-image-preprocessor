@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "lfp-image-preprocessor"
+version = "0.1.0"
+description = "Image tiling & tag-search-precomputer for the LeftEyePro.com website"
+authors = ["c7c8 <me@crmyers.dev>"]
+license = "GPLv3.0"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
