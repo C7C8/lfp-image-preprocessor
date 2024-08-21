@@ -1,16 +1,15 @@
 ```
-usage: LEP Image Preprocessor [-h] [-o OUTPUT] [-r] [-v] [-s TILE_SIZE]
-                              [--overwrite] [--log LOG]
-                              folder
+usage: LEP Image Preprocessor [-h] [--file FILE | --folder FOLDER] [-o OUTPUT]
+                              [-r] [-v] [-s TILE_SIZE] [--overwrite]
+                              [--log LOG]
 
 Program for extracting EXIF data from images, creating tag + image sidecars,
 and tiling images
 
-positional arguments:
-  folder                Folder with JPEGs to process
-
 options:
   -h, --help            show this help message and exit
+  --file FILE           JPEG to process
+  --folder FOLDER       Folder with JPEGs to process
   -o OUTPUT, --output OUTPUT
                         Output folder
   -r, --recursive       Recursively find images

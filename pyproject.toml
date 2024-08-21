@@ -5,12 +5,13 @@ description = "Image tiling & tag-search-precomputer for the LeftEyePro.com webs
 authors = ["c7c8 <me@crmyers.dev>"]
 license = "GPLv3.0"
 readme = "README.md"
+package-mode = false
 
 [tool.poetry.dependencies]
-python = "^3.11"
-pillow = "10.4.x"
-dearpygui = "1.11.x"
-pyyaml = "6.0.x"
+python = "^3.12"
+pyyaml = "^6.0.2"
+pillow = "^10.4.0"
+defusedxml = "^0.7.1"
 
 
 [tool.poetry.group.dev.dependencies]
