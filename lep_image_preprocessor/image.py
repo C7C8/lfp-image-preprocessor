@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List
 
 import dateutil.parser
+from PIL.Image import Resampling
 from PIL.ImageFile import ImageFile
 
 from lep_image_preprocessor import log
@@ -47,8 +48,23 @@ def extract_date(image: ImageFile) -> datetime.datetime | None:
         str_date = reduce(lambda x, y: x | y, image.getxmp()["xmpmeta"]["RDF"]["Description"])["CreateDate"]
         return dateutil.parser.parse(str_date)
     except Exception as e:
-        log.warn("Image '%s' does not have a description!", image.filename)
+        log.warn("Image '%s' does not have a parseable date!", image.filename)
+        log.debug("'%s' date parsing error: %s", image.filename, e)
         return
+
+
+def create_thumbnail(image: ImageFile, destination: Path, size: int) -> None:
+    """Create a thumbnail for an [image] and write it out to a [destination] path. The thumbnail's maximum dimension
+    along either axis will be at most [size]."""
+    thumbnail = image.copy()
+    thumbnail.thumbnail((size, size), Resampling.BICUBIC)
+    log.debug("Created %dx%d thumbnail for image '%s'; writing out to '%s'", thumbnail.size[0], thumbnail.size[1], image.filename, destination)
+
+    try:
+        thumbnail.save(destination)
+    except OSError as e:
+        log.error("Failed to write thumbnail '%s'; %s", destination, e)
+        raise e
 
 
 def tile_image(image: ImageFile, containing_folder: Path, tile_size=256) -> List[List[str]]:

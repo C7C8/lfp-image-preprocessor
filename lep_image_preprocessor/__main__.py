@@ -9,7 +9,7 @@ import yaml
 from PIL import Image
 
 from lep_image_preprocessor import log, log_formatter
-from lep_image_preprocessor.image import extract_tags, tile_image, extract_description, extract_date
+from lep_image_preprocessor.image import extract_tags, tile_image, extract_description, extract_date, create_thumbnail
 
 
 def dir_path(path: str) -> Path:
@@ -42,6 +42,7 @@ def main():
     parser.add_argument("-r", "--recursive", action="store_true", help="Recursively find images if a target folder was provided")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
     parser.add_argument("-s", "--tile-size", default=256, type=int, help="Image tile size (all tiles are squares)")
+    parser.add_argument("-t", "--thumbnail-size", default=384, type=int, help="Image thumbnail max dimension along either axis")
     parser.add_argument("--ignore-errors", action="store_true", help="Ignore errors during processing and continue processing the queue")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing outputs")
     parser.add_argument("--log", type=argparse.FileType("w+"), help="Optional log file")
@@ -65,7 +66,9 @@ def main():
         log.critical("Failed to create output path '%s': %s", args.output, e)
         return
 
-    # Assemble list of files to process
+    #######################
+    # FILE QUEUE ASSEMBLY #
+    #######################
     file_queue: List[Path] = []
     if args.file is not None:
         file_queue.append(args.file)
@@ -81,23 +84,27 @@ def main():
                 log.error("Failed to extract collect list of files from '%s': %s", args.folder, e)
                 if not args.ignore_errors:
                     log.critical("Aborting processing run due to failure to list all files in directory '%s'!", args.folder)
-
     log.debug("Collected %d files to process: %s", len(file_queue), list(map(lambda path: path.as_posix(), file_queue)))
 
+    ##########################
+    # IMAGE TILING & TAGGING #
+    ##########################
     all_tags: Dict[str, List[str]] = {}
     all_tile_outputs: List[str] = []
     for i, path in enumerate(file_queue):
         log.info("(%d/%d) Processing file '%s'...", i + 1, len(file_queue), path)
         try:
-            # All operations on the actual image file.
             with Image.open(path) as image:
-                img_tags = extract_tags(image)
                 tiles_output = args.output / path.stem
-                all_tile_outputs.append(tiles_output)
+                thumbnail_path = tiles_output / f"thumbnail{path.suffix}"
+                img_tags = extract_tags(image)
+                all_tile_outputs.append(tiles_output.relative_to(args.output))
                 tiles = tile_image(image, tiles_output, args.tile_size)
+                create_thumbnail(image, thumbnail_path, args.thumbnail_size)
 
                 image_sidecar_data = {
                     "description": extract_description(image),
+                    "thumbnail": thumbnail_path.relative_to(tiles_output).as_posix(),
                     "date": extract_date(image),
                     "filezize": os.stat(path).st_size,
                     "dimensions": {
@@ -132,7 +139,9 @@ def main():
     log.info("Finished processing %d files (output written to '%s'); writing out tag sidecar files before finishing up",
              len(file_queue), args.output)
 
-    # Write out tag sidecars
+    ################
+    # TAG SIDECARS #
+    ################
     tags_dir = args.output / "tags"
     if tags_dir.exists():
         log.warning("Tag sidecar directory '%s' already exists; tag sidecar files within will be overwritten!", tags_dir)
@@ -162,7 +171,9 @@ def main():
                 log.critical("Aborting processing run due to failed tag sidecar writing!")
                 return
 
-    # Write out the tag index file
+    ##################
+    # TAG INDEX FILE #
+    ##################
     tag_index_path = args.output / "tags.index.yaml"
     log.debug("Writing tag index file '%s'", tag_index_path)
     if tag_index_path.exists():
@@ -176,7 +187,9 @@ def main():
             log.critical("Aborting processing run due to failed tag index writing!")
             return
 
-    # Write out image index
+    ####################
+    # IMAGE INDEX FILE #
+    ####################
     image_index_path = args.output / "images.index.yaml"
     log.debug("Writing image index file '%s'", image_index_path)
     if image_index_path.exists():
