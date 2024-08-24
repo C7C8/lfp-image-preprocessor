@@ -3,13 +3,13 @@ import logging
 import os
 from pathlib import Path
 from argparse import ArgumentParser
-from typing import List
+from typing import List, Dict
 
 import yaml
 from PIL import Image
 
 from lep_image_preprocessor import log, log_formatter
-from lep_image_preprocessor.image import extract_tags, tile_image
+from lep_image_preprocessor.image import extract_tags, tile_image, extract_description, extract_date
 
 
 def dir_path(path: str) -> Path:
@@ -58,8 +58,12 @@ def main():
         handler.setFormatter(log_formatter)
         log.addHandler(handler)
 
-    log.debug("Using output path '%s' and ensuring path exists", args.output.resolve())
-    args.output.mkdir(parents=True, exist_ok=True)
+    log.debug("Using output path '%s' and ensuring path exists", args.output)
+    try:
+        args.output.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        log.critical("Failed to create output path '%s': %s", args.output, e)
+        return
 
     # Assemble list of files to process
     file_queue: List[Path] = []
@@ -68,41 +72,109 @@ def main():
     extensions = ["jpg", "jpeg", "JPEG", "JPG"]
     if args.folder is not None:
         for extension in extensions:
-            if args.recursive:
-                file_queue.extend(args.folder.glob(f"**/*.{extension}"))
-            else:
-                file_queue.extend(args.folder.glob(f"*.{extension}"))
+            try:
+                if args.recursive:
+                    file_queue.extend(args.folder.glob(f"**/*.{extension}"))
+                else:
+                    file_queue.extend(args.folder.glob(f"*.{extension}"))
+            except OSError as e:
+                log.error("Failed to extract collect list of files from '%s': %s", args.folder, e)
+                if not args.ignore_errors:
+                    log.critical("Aborting processing run due to failure to list all files in directory '%s'!", args.folder)
 
     log.debug("Collected %d files to process: %s", len(file_queue), list(map(lambda path: path.as_posix(), file_queue)))
 
-    for path in file_queue:
-        log.info("Processing file '%s'...", path.as_posix())
+    all_tags: Dict[str, List[str]] = {}
+    for i, path in enumerate(file_queue):
+        log.info("(%d/%d) Processing file '%s'...", i + 1, len(file_queue), path)
         try:
+            # All operations on the actual image file.
             with Image.open(path) as image:
+                img_tags = extract_tags(image)
                 tiles_destination = args.output / path.stem
+                tiles = tile_image(image, tiles_destination, args.tile_size)
+
                 image_sidecar_data = {
-                    "tags": extract_tags(image),
+                    "description": extract_description(image),
+                    "date": extract_date(image),
                     "filezize": os.stat(path).st_size,
                     "dimensions": {
                         "width": image.width,
-                        "height": image.height
+                        "height": image.height,
+                        "columns": len(tiles[0]),
+                        "rows": len(tiles),
                     },
-                    "tiles": tile_image(image, tiles_destination, args.tile_size)
+                    "tags": img_tags,
+                    "tiles": tiles
                 }
-            with open(tiles_destination / "sidecar.yaml", "w") as sidecar_file:
+            # Write out sidecar file to the directory we stored all our tiles
+            with open(tiles_destination / f"{path.stem}.sidecar.yaml", "w") as sidecar_file:
                 log.debug("Writing sidecar file for '%s' to '%s'", path, tiles_destination / "sidecar.yaml")
                 yaml.dump(image_sidecar_data, sidecar_file)
 
-            log.debug("Finished processing file '%s'", path.as_posix())
+            # Add all newly-found tags
+            prev_tags_count = len(all_tags)
+            for tag in img_tags:
+                if tag not in all_tags:
+                    all_tags[tag] = []
+                all_tags[tag].append(path.stem)
+            log.debug("Processing '%s' found %d new tags (%d->%d)", path, len(all_tags) - prev_tags_count, prev_tags_count, len(all_tags))
+            log.info("(%d/%d) Finished processing file '%s'", i + 1, len(file_queue), path)
 
         except BaseException as e:
-            if args.ignore_errors:
-                log.warn("Encountered %s error while processing file '%s', skipping file and continuing", e, path.as_posix())
-                log.debug(e)
-            else:
-                log.critical("Encountered %s error while processing file '%s', aborting processing!", e, path.as_posix())
-                log.debug(e)
-                break
+            log.warning("Encountered error while processing file '%s', skipping file and continuing:%e ", path, e)
+            if not args.ignore_errors:
+                log.critical("Aborting processing run due to error processing file '%s'", path)
+                return
+
+    log.info("Finished processing %d files (output written to '%s'); writing out tag sidecar files before finishing up",
+             len(file_queue), args.output)
+
+    # Write out tag sidecars
+    tags_dir = args.output / "tags"
+    if tags_dir.exists():
+        log.warning("Tag sidecar directory '%s' already exists; tag sidecar files within will be overwritten!", tags_dir)
+    else:
+        log.debug("Creating tag sidecar directory '%s'", tags_dir)
+        tags_dir.mkdir(exist_ok=True, parents=True)
+
+    tag_index: Dict[str, str] = {}
+    for tag, tagged_images in all_tags.items():
+        # Save the sidecar path we can build an index later
+        tag_sidecar_path = tags_dir / f"{tag.replace(" ", "_")}.sidecar.yaml"
+        if tag_sidecar_path.exists():
+            log.warning("Tag sidecar file '%s' already exists and will be overwritten", tag_sidecar_path)
+
+        tag_index[tag] = tag_sidecar_path.relative_to(args.output).as_posix()
+        try:
+            with open(tag_sidecar_path, "w") as sidecar_file:
+                yaml.dump({
+                    "name": tag,
+                    "description": "No description",
+                    "images": tagged_images
+                }, sidecar_file)
+                log.debug("Wrote tag sidecar file '%s'", tag_sidecar_path)
+        except OSError as e:
+            log.error("Encountered error while writing tag sidecar file '%s': %s", tag_sidecar_path, e)
+
+            if not args.ignore_errors:
+                log.critical("Aborting processing run due to failed tag sidecar writing!")
+                return
+
+    # Write out the tag index file
+    tag_index_path = args.output / "tags.index.yaml"
+    log.debug("Writing tag index file '%s'", tag_index_path)
+    if tag_index_path.exists():
+        log.warning("Tag index file '%s' already exists and will be overwritten", tag_index_path)
+    try:
+        with open(tag_index_path, "w") as index_file:
+            yaml.dump(tag_index, index_file)
+    except OSError as e:
+        log.error("Encountered error while writing tag index file '%s': %s", tag_index_path, e)
+
+        if not args.ignore_errors:
+            log.critical("Aborting processing run due to failed tag index writing!")
+            return
 
 
 if __name__ == '__main__':

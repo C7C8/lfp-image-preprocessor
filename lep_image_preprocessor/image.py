@@ -1,9 +1,11 @@
 import hashlib
 import re
+import datetime
 from functools import reduce
 from pathlib import Path
 from typing import List
 
+import dateutil.parser
 from PIL.ImageFile import ImageFile
 
 from lep_image_preprocessor import log
@@ -13,17 +15,40 @@ _tag_regex = re.compile("^[A-z].+")
 
 def extract_tags(image: ImageFile) -> List[str]:
     """Given an [image], return a set of XMP tags contained within it."""
-    log.debug("Extracting tags from image %s; inspecting for XMP data", image.filename)
+    log.debug("Extracting tags from file '%s'; inspecting for XMP data", image.filename)
     tags = []
 
     try:
         xmp = reduce(lambda x, y: x | y, image.getxmp()["xmpmeta"]["RDF"]["Description"])
         tags.extend(filter(lambda subject: _tag_regex.match(subject) is not None, xmp["subject"]["Bag"]["li"]))
     except Exception as e:
-        log.warn("Encountered error '%s' extracting tags from image %s; assuming there are no tags.", e, image.filename)
+        log.warn("Encountered error '%s' extracting tags from file '%s'; assuming there are no tags.", e, image.filename)
 
-    log.debug("Extracted %d tags from file %s: %s", len(tags), image.filename, tags)
+    log.debug("Extracted %d tags from file '%s': %s", len(tags), image.filename, tags)
     return tags
+
+
+def extract_description(image: ImageFile) -> str | None:
+    log.debug("Extracting description from image '%s'; inspecting for XMP data", image.filename)
+    try:
+        return (
+            reduce(lambda x, y: x | y,
+                   image.getxmp()["xmpmeta"]["RDF"]["Description"])
+            ["description"]["Alt"]["li"]["text"]
+        )
+    except Exception as e:
+        log.warn("Image '%s' does not have a description!", image.filename)
+        return
+
+
+def extract_date(image: ImageFile) -> datetime.datetime | None:
+    log.debug("Extracting date from image '%s'; inspecting for XMP data", image.filename)
+    try:
+        str_date = reduce(lambda x, y: x | y, image.getxmp()["xmpmeta"]["RDF"]["Description"])["CreateDate"]
+        return dateutil.parser.parse(str_date)
+    except Exception as e:
+        log.warn("Image '%s' does not have a description!", image.filename)
+        return
 
 
 def tile_image(image: ImageFile, containing_folder: Path, tile_size=256) -> List[List[str]]:
@@ -31,7 +56,13 @@ def tile_image(image: ImageFile, containing_folder: Path, tile_size=256) -> List
     image paths representing rows first, then columns. For obfuscation purposes, filenames will be SHA1 hashes of their
     contents."""
     log.debug("Tiling image '%s' into path '%s'; creating dir if it doesn't exist", image.filename, containing_folder)
-    containing_folder.mkdir(parents=True, exist_ok=True)
+
+    try:
+        containing_folder.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        log.error("Encountered error creating tile output folder '%s': %s", containing_folder, e)
+        raise e
+
     extension = Path(image.filename).suffix
     edge_width = image.size[0] % tile_size
     edge_height = image.size[1] % tile_size
@@ -72,11 +103,21 @@ def tile_image(image: ImageFile, containing_folder: Path, tile_size=256) -> List
             tile.save(tmp_file_path)
 
             # Calculate SHA1 hash to use as image filename
-            with open(tmp_file_path, "rb") as f:
-                sha1 = hashlib.file_digest(f, "sha1").hexdigest()
+            try:
+                with open(tmp_file_path, "rb") as f:
+                    sha1 = hashlib.file_digest(f, "sha1").hexdigest()
+            except OSError as e:
+                log.error("Encountered error writing '%s' tile (%d, %d, %d, %d) to file '%s': %s",
+                          image.filename, min_x, max_x, min_y, max_y, tmp_file_path, e)
+                raise e
 
             new_path = containing_folder / f"{sha1}{extension}"
-            tmp_file_path.rename(new_path)
+            try:
+                tmp_file_path.rename(new_path)
+            except OSError as e:
+                log.error("Encountered error renaming temp file '%s' to '%s': %s", tmp_file_path, new_path, e)
+                raise e
+
             tile_row.append(new_path.name)
             log.debug("Saved tile (%d, %d, %d, %d) of '%s' to file %s", min_x, max_x, min_y, max_y, image.filename, new_path)
         tiles_paths.append(tile_row)
