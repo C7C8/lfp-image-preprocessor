@@ -85,14 +85,16 @@ def main():
     log.debug("Collected %d files to process: %s", len(file_queue), list(map(lambda path: path.as_posix(), file_queue)))
 
     all_tags: Dict[str, List[str]] = {}
+    all_tile_outputs: List[str] = []
     for i, path in enumerate(file_queue):
         log.info("(%d/%d) Processing file '%s'...", i + 1, len(file_queue), path)
         try:
             # All operations on the actual image file.
             with Image.open(path) as image:
                 img_tags = extract_tags(image)
-                tiles_destination = args.output / path.stem
-                tiles = tile_image(image, tiles_destination, args.tile_size)
+                tiles_output = args.output / path.stem
+                all_tile_outputs.append(tiles_output)
+                tiles = tile_image(image, tiles_output, args.tile_size)
 
                 image_sidecar_data = {
                     "description": extract_description(image),
@@ -108,8 +110,8 @@ def main():
                     "tiles": tiles
                 }
             # Write out sidecar file to the directory we stored all our tiles
-            with open(tiles_destination / f"{path.stem}.sidecar.yaml", "w") as sidecar_file:
-                log.debug("Writing sidecar file for '%s' to '%s'", path, tiles_destination / "sidecar.yaml")
+            with open(tiles_output / f"{path.stem}.sidecar.yaml", "w") as sidecar_file:
+                log.debug("Writing sidecar file for '%s' to '%s'", path, tiles_output / "sidecar.yaml")
                 yaml.dump(image_sidecar_data, sidecar_file)
 
             # Add all newly-found tags
@@ -156,7 +158,6 @@ def main():
                 log.debug("Wrote tag sidecar file '%s'", tag_sidecar_path)
         except OSError as e:
             log.error("Encountered error while writing tag sidecar file '%s': %s", tag_sidecar_path, e)
-
             if not args.ignore_errors:
                 log.critical("Aborting processing run due to failed tag sidecar writing!")
                 return
@@ -171,9 +172,22 @@ def main():
             yaml.dump(tag_index, index_file)
     except OSError as e:
         log.error("Encountered error while writing tag index file '%s': %s", tag_index_path, e)
-
         if not args.ignore_errors:
             log.critical("Aborting processing run due to failed tag index writing!")
+            return
+
+    # Write out image index
+    image_index_path = args.output / "images.index.yaml"
+    log.debug("Writing image index file '%s'", image_index_path)
+    if image_index_path.exists():
+        log.warning("Image index file '%s' already exists and will be overwritten", image_index_path)
+    try:
+        with open(image_index_path, "w") as index_file:
+            yaml.dump(list(map(lambda path: path.as_posix(), all_tile_outputs)), index_file)
+    except OSError as e:
+        log.error("Encountered error while writing image index file '%s': %s", image_index_path, e)
+        if not args.ignore_errors:
+            log.critical("Aborting processing run due to failed image index writing!")
             return
 
 
