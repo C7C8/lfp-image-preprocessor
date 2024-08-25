@@ -6,7 +6,7 @@ from argparse import ArgumentParser
 from typing import List, Dict
 
 import yaml
-from PIL import Image
+from PIL import Image, ImageFile
 
 from lep_image_preprocessor import log, log_formatter
 from lep_image_preprocessor.image import extract_tags, tile_image, extract_description, extract_date, create_thumbnail
@@ -43,6 +43,7 @@ def main():
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
     parser.add_argument("-s", "--tile-size", default=256, type=int, help="Image tile size (all tiles are squares)")
     parser.add_argument("-t", "--thumbnail-size", default=384, type=int, help="Image thumbnail max dimension along either axis")
+    parser.add_argument("--resize", default=None, type=int, help="Resize images so that no dimension is longer than this measurement")
     parser.add_argument("--ignore-errors", action="store_true", help="Ignore errors during processing and continue processing the queue")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing outputs")
     parser.add_argument("--log", type=argparse.FileType("w+"), help="Optional log file")
@@ -95,16 +96,25 @@ def main():
         log.info("(%d/%d) Processing file '%s'...", i + 1, len(file_queue), path)
         try:
             with Image.open(path) as image:
-                tiles_output = args.output / path.stem
-                thumbnail_path = tiles_output / f"thumbnail{path.suffix}"
+                image_output_folder = args.output / path.stem
+                image_output_folder.mkdir(parents=True, exist_ok=True)
                 img_tags = extract_tags(image)
-                all_tile_outputs.append(tiles_output.relative_to(args.output))
-                tiles = tile_image(image, tiles_output, args.tile_size)
+                thumbnail_path = image_output_folder / f"thumbnail{path.suffix}"
                 create_thumbnail(image, thumbnail_path, args.thumbnail_size)
 
-                image_sidecar_data = {
+                # Image tiling
+                all_tile_outputs.append(image_output_folder.relative_to(args.output))
+                if args.resize is not None:
+                    image_tile_target = image.copy()
+                    image.thumbnail((args.resize, args.resize))
+                    log.debug("Resized image '%s' from %dx%d to %dx%d", path, *image.size, *image_tile_target.size)
+                else:
+                    image_tile_target = image.copy()
+                tiles = tile_image(image_tile_target, path, image_output_folder, args.tile_size)
+
+            image_sidecar_data = {
                     "description": extract_description(image),
-                    "thumbnail": thumbnail_path.relative_to(tiles_output).as_posix(),
+                    "thumbnail": thumbnail_path.relative_to(image_output_folder).as_posix(),
                     "date": extract_date(image),
                     "filezize": os.stat(path).st_size,
                     "dimensions": {
@@ -116,9 +126,11 @@ def main():
                     "tags": img_tags,
                     "tiles": tiles
                 }
+
             # Write out sidecar file to the directory we stored all our tiles
-            with open(tiles_output / f"{path.stem}.sidecar.yaml", "w") as sidecar_file:
-                log.debug("Writing sidecar file for '%s' to '%s'", path, tiles_output / "sidecar.yaml")
+            sidecar_path = image_output_folder / f"{path.stem}.sidecar.yaml"
+            with open(sidecar_path, "w") as sidecar_file:
+                log.debug("Writing sidecar file for '%s' to '%s'", path, sidecar_path)
                 yaml.dump(image_sidecar_data, sidecar_file)
 
             # Add all newly-found tags
