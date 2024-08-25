@@ -106,7 +106,7 @@ def main():
                 all_tile_outputs.append(image_output_folder.relative_to(args.output))
                 if args.resize is not None:
                     image_tile_target = image.copy()
-                    image.thumbnail((args.resize, args.resize))
+                    image_tile_target.thumbnail((args.resize, args.resize))
                     log.debug("Resized image '%s' from %dx%d to %dx%d", path, *image.size, *image_tile_target.size)
                 else:
                     image_tile_target = image.copy()
@@ -116,7 +116,7 @@ def main():
                     "description": extract_description(image),
                     "thumbnail": thumbnail_path.relative_to(image_output_folder).as_posix(),
                     "date": extract_date(image),
-                    "filezize": os.stat(path).st_size,
+                    "filesize": os.stat(path).st_size,
                     "dimensions": {
                         "width": image.width,
                         "height": image.height,
